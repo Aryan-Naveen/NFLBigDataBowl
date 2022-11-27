@@ -9,18 +9,20 @@ from datetime import datetime
 games = pd.read_csv('data/games.csv')
 pff = pd.read_csv('data/pffScoutingData.csv')
 players = pd.read_csv('data/players.csv')
-plays = pd.read_csv('data/plays.csv').tail(100)
+plays = pd.read_csv('data/plays.csv')
 
 print('~~~~~~~~~ Reading in week data ~~~~~~~~~~~~')
 week = pd.concat(map(pd.read_csv, ['data/week1.csv', 'data/week2.csv', 'data/week3.csv', 'data/week4.csv', 'data/week5.csv', 'data/week6.csv', 'data/week7.csv', 'data/week8.csv']), ignore_index=True)
 print('~~~~~~~~~ Read in week data ~~~~~~~~~~~~')
 qbs = players.loc[players['officialPosition'] == "QB", "nflId"].to_list()
-
+blockers = pff[pff.pff_role == "Pass Block"]
 
 class PlayData():
 
     def __init__(self):
         self.col = np.array([member[0][11:] for member in inspect.getmembers(self, predicate=inspect.ismethod)[:-2]])
+        self.col = np.insert(self.col, 0, 'gameId')
+        self.col = np.insert(self.col, 1, 'playId')
 
         def replace(arr, old, new):
             arr = np.insert(arr, np.where(arr == old)[0], new)
@@ -29,6 +31,7 @@ class PlayData():
 
         # replace with types of blockers
         self.col = replace(self.col, 'types_of_blockers', pff['pff_blockType'].unique()[1: ])
+        self.col = replace(self.col, 'blockerShape', ['stdX', 'stdY', 'stdO'])
 
 
 
@@ -39,9 +42,11 @@ class PlayData():
         self.pff_playData = pff[(pff['gameId'] == gameId) & (pff['playId'] == playId)]
         self.meta_playData = plays[(plays['gameId'] == gameId) & (plays['playId'] == playId)]
         self.week_playData = week[(week['gameId'] == gameId) & (week['playId'] == playId)]
+        self.blockers = blockers.nflId[(pff['gameId'] == gameId) & (pff['playId'] == playId)]
 
         feature = np.concatenate(tuple([value[1]() for value in inspect.getmembers(self, predicate=inspect.ismethod)[:-2]]), axis=None)
-        return feature;
+        feature = np.insert(feature, 0, [gameId, playId])
+        return feature.flatten();
 
     def __numblockers(self):
         return self.pff_playData[pff['pff_role'] == "Pass Block"].shape[0]
@@ -72,11 +77,13 @@ class PlayData():
         return int(self.pff_playData['pff_sackAllowed'].sum() > 0)
 
     def __releaseTime(self):
+        playStartEvents = ['ball_snap']
         playEndEvents = ['pass_forward', 'fumble', 'qb_sack', 'qb_strip_sack']
-        start = datetime.strptime(self.week_playData[self.week_playData['event'] == 'ball_snap']['time'].values[0], "%Y-%m-%dT%H:%M:%S.%f")
+        startPlays = self.week_playData[self.week_playData['event'].isin(playStartEvents)]
         endPlays = self.week_playData[self.week_playData['event'].isin(playEndEvents)]
-        if endPlays.size == 0:
+        if endPlays.size == 0 or startPlays.size == 0:
             return np.nan
+        start = datetime.strptime(startPlays['time'].values[0], "%Y-%m-%dT%H:%M:%S.%f")
         end = datetime.strptime(endPlays['time'].values[0], "%Y-%m-%dT%H:%M:%S.%f")
 
         return (end - start).total_seconds()
@@ -86,6 +93,9 @@ class PlayData():
 
     def __playDirection(self):
         return self.week_playData['playDirection'].values[0]
+
+    def __blockerShape(self):
+        return self.week_playData[self.week_playData.nflId.isin(self.blockers)].drop_duplicates(subset=['nflId'])[['x', 'y', 'o']].std().values
 
 
 if __name__ == '__main__':
